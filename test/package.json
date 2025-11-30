@@ -1,0 +1,5 @@
+{
+    "scripts": {
+        "test:seed": "tsx test/seed-data.ts"
+    }
+}

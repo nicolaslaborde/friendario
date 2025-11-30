@@ -1,0 +1,267 @@
+// Friendoria Database Schema
+// This schema defines the data models for the collaborative event memory sharing application
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// User model - stores user information and authentication data
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?   // For email/password authentication
+  phone         String?
+  phoneVerified Boolean   @default(false)
+  status        UserStatus @default(PENDING)
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  // Relations
+  accounts      Account[]
+  sessions      Session[]
+  createdEvents Event[]   @relation("EventCreator")
+  participations Participant[]
+  contributions Contribution[]
+  notifications Notification[]
+  
+  @@index([email])
+}
+
+enum UserStatus {
+  PENDING    // En attente de vérification
+  REGISTERED // Enregistré et vérifié
+  INACTIVE   // Compte inactif
+}
+
+// NextAuth Account model
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+// NextAuth Session model
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+}
+
+// NextAuth Verification Token model
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+  
+  @@unique([identifier, token])
+}
+
+// Event model - stores event information
+model Event {
+  id          String   @id @default(cuid())
+  title       String
+  description String?  @db.Text
+  
+  // Date and duration
+  startDate   DateTime
+  endDate     DateTime?
+  isPunctual  Boolean  @default(true) // true = 1 jour, false = plusieurs jours
+  
+  // Location
+  location    String?
+  latitude    Float?
+  longitude   Float?
+  
+  // Creator
+  creatorId   String
+  creator     User     @relation("EventCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  participants Participant[]
+  media        Media[]
+  contributions Contribution[]
+  
+  @@index([creatorId])
+  @@index([startDate])
+}
+
+// Participant model - links users to events
+model Participant {
+  id        String   @id @default(cuid())
+  eventId   String
+  userId    String
+  role      ParticipantRole @default(PARTICIPANT)
+  status    ParticipantStatus @default(INVITED)
+  
+  invitedAt DateTime @default(now())
+  joinedAt  DateTime?
+  
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([eventId, userId])
+  @@index([eventId])
+  @@index([userId])
+}
+
+enum ParticipantRole {
+  CREATOR      // Créateur de l'événement
+  PARTICIPANT  // Participant invité
+}
+
+enum ParticipantStatus {
+  INVITED      // Invité mais pas encore accepté
+  ACCEPTED     // A accepté l'invitation
+  DECLINED     // A refusé l'invitation
+}
+
+// Media model - stores references to S3 files
+model Media {
+  id          String   @id @default(cuid())
+  eventId     String
+  uploadedBy  String   // User ID
+  
+  type        MediaType
+  s3Key       String   // S3 object key
+  s3Bucket    String   // S3 bucket name
+  filename    String
+  mimeType    String
+  size        Int      // File size in bytes
+  
+  // Optional metadata
+  caption     String?  @db.Text
+  duration    Int?     // For videos/audio in seconds
+  width       Int?     // For images/videos
+  height      Int?     // For images/videos
+  
+  status      MediaStatus @default(PENDING)
+  
+  createdAt   DateTime @default(now())
+  
+  event       Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  
+  @@index([eventId])
+  @@index([uploadedBy])
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+}
+
+enum MediaStatus {
+  PENDING    // En attente de validation par le créateur
+  VALIDATED  // Validé par le créateur
+  REJECTED   // Rejeté par le créateur
+}
+
+// Contribution model - stores user contributions to events
+model Contribution {
+  id          String   @id @default(cuid())
+  eventId     String
+  userId      String
+  
+  type        ContributionType
+  content     String   @db.Text
+  
+  status      ContributionStatus @default(PENDING)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  validatedAt DateTime?
+  
+  event       Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([eventId])
+  @@index([userId])
+  @@index([status])
+}
+
+enum ContributionType {
+  ANECDOTE     // Anecdote
+  COMMENT      // Commentaire
+  PARTICIPANT  // Ajout de participant
+  LOCATION     // Modification de lieu
+  DATE         // Modification de date
+  OTHER        // Autre type de contribution
+}
+
+enum ContributionStatus {
+  PENDING    // En attente de validation
+  VALIDATED  // Validé par le créateur
+  REJECTED   // Rejeté par le créateur
+}
+
+// Notification model - stores notification history
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  
+  type      NotificationType
+  title     String
+  message   String   @db.Text
+  
+  // Related entities
+  eventId   String?
+  contributionId String?
+  
+  isRead    Boolean  @default(false)
+  sentVia   NotificationChannel[]
+  
+  createdAt DateTime @default(now())
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+enum NotificationType {
+  EVENT_INVITATION       // Invitation à un événement
+  CONTRIBUTION_ADDED     // Nouvelle contribution ajoutée
+  CONTRIBUTION_VALIDATED // Contribution validée
+  CONTRIBUTION_REJECTED  // Contribution rejetée
+  PARTICIPANT_JOINED     // Nouveau participant
+  EVENT_UPDATED          // Événement modifié
+}
+
+enum NotificationChannel {
+  IN_APP  // Notification in-app
+  EMAIL   // Email
+  SMS     // SMS
+}
